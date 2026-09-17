@@ -271,8 +271,8 @@ async def async_request_error_process(func, *args):
     resp = None
     try:
         resp = await func(*args)
-    except requests.exceptions.ConnectionError:
-        error = "Request failed, status ConnectionError"
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as err:
+        error = f"Request failed, status {type(err).__name__}"
         return error, resp
     
     if not resp.ok:
@@ -548,6 +548,10 @@ def get_plug_memos(config):
     return memos
     
 def plug_status_process(data):
+    if not isinstance(data, dict) or data.get('result', 0) != 0:
+        raise ValueError("Invalid or unsuccessful plug status response")
+    if not isinstance(data.get(DP_RELAY), list) or not data[DP_RELAY]:
+        raise ValueError("Plug status response contains no relay states")
     status = dict()
     for relay_status in data.get(DP_RELAY, ''):
         index = relay_status['index']
@@ -564,6 +568,10 @@ def plug_status_process(data):
     return status
 
 def plug_electric_process(data):
+    if not isinstance(data, dict) or data.get('result', 0) != 0:
+        raise ValueError("Invalid or unsuccessful plug electric response")
+    if not any(data.get(key) is not None for key in ('vol', 'curr', 'power', 'sub')):
+        raise ValueError("Plug electric response contains no measurements")
     status = dict()
     if (voltage := data.get('vol')) is not None:
         status[DP_VOLTAGE] = voltage
@@ -1125,12 +1133,9 @@ class SunloginPlug(SunLoginDevice, ABC):
             _LOGGER.debug(f"{self.name} (api.async_get_electric): {resp.text}")
             r_json = resp.json()
             self._status.update(plug_electric_process(r_json))
-            self._available = True
             self.electric_fail_count = 0
         except Exception as e: 
             _LOGGER.debug(f"{self.name} (api.async_get_electric): {e}")
-            if self.electric_fail_count >= get_max_retries(self.hass):
-                self._available = False
             self.electric_fail_count += 1
 
         self.write_ha_state()
@@ -1141,11 +1146,9 @@ class SunloginPlug(SunLoginDevice, ABC):
             r_json = resp.json()
             self._status.update(plug_power_consumes_process(r_json))
             self.power_consumes_fail_count = 0
-        except: 
-            if self.status(DP_REMOTE):
-                if self.power_consumes_fail_count >= get_max_retries(self.hass):
-                    self._available = False
-                self.power_consumes_fail_count += 1
+        except Exception as err:
+            self.power_consumes_fail_count += 1
+            _LOGGER.debug("%s power history update failed (%s)", self.name, type(err).__name__)
 
         self.write_ha_state()
     
@@ -1559,9 +1562,8 @@ class P8(SunloginPlug):
                 resp = await self.api.async_get_power_consumes(self.sn, index=index)
                 r_json = resp.json()
                 self._status.update(plug_power_consumes_process(r_json, index=index))
-            except: 
-                if self.device.status(DP_REMOTE):
-                    self._available = False
+            except Exception as err:
+                _LOGGER.debug("%s power history outlet %s failed (%s)", self.name, index, type(err).__name__)
         
         self.write_ha_state()
     

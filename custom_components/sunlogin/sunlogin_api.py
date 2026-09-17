@@ -127,7 +127,8 @@ class SunloginAuth(AuthBase):
 class HTTPRequest(ABC):
     hass = None
     session = None
-    timeout = None
+    # Bound both connection establishment and reads in executor threads.
+    timeout = (5, 15)
     _verify = dict()
     _proxies = dict()
 
@@ -633,6 +634,3 @@ class PlugAPI_V2_FAST(HTTPRequest):
         
         resp = await self.async_make_request_by_requests("GET", url)
         return resp
-    
-
-    
